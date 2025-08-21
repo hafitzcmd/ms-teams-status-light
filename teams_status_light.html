@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teams Status Light — No-Install Interface</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 2rem; max-width: 800px; }
+    h1 { margin-bottom: 0.25rem; }
+    .note { background: #f5f5f7; padding: 1rem; border-radius: 12px; }
+    button { padding: .7rem 1rem; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+    .status { display:inline-flex; align-items:center; gap:.5rem; border:1px solid #ddd; padding:.4rem .6rem; border-radius:8px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; display:inline-block; }
+    .dot.green{ background:#00b050 }
+    .dot.red{ background:#ff0000 }
+    .dot.purple{ background:#800080 }
+    .dot.amber{ background:#ff8c00 }
+    .dot.gray{ background:#808080 }
+    code { background: #f0f0f0; padding: 2px 5px; border-radius: 6px; }
+    .small { color:#555; font-size:.9rem }
+  </style>
+  <!-- MSAL for browser -->
+  <script src="https://alcdn.msauth.net/browser/3.17.0/js/msal-browser.min.js" defer></script>
+</head>
+<body>
+  <h1>Teams Status Light</h1>
+  <p class="small">No install: open this page in Edge/Chrome over <b>https://</b> (or <b><a href="https://urldefense.com/v3/__http://localhost__;!!Lav448XFWxY!5h2TF4sOL94_D_e2e3-fEJJ7f0_siOksgTuRonI4ZJzkYhUXtBZJKuSQD0skXpO7HNPZjrqrHOqjjBJeXf4ktAQhqNU7wMNKhkagyR4$">http://localhost</a></b>) so Web Serial & sign-in work. Then connect the Arduino.</p>
+
+  <div class="note">
+    <b>Steps</b>
+    <ol>
+      <li>Plug the Arduino Uno in. Upload the provided sketch (115200 baud).</li>
+      <li>Open this page from a secure origin (https/localhost).</li>
+      <li>Click <b>Connect Light</b> and choose the Arduino’s COM port.</li>
+      <li>Click <b>Sign in</b> to Microsoft 365, consent to <code>Presence.Read</code>.</li>
+      <li>Watch your light change automatically. Use the manual test buttons anytime.</li>
+    </ol>
+  </div>
+
+  <div class="row">
+    <button id="btnConnect">🔌 Connect Light</button>
+    <button id="btnSignIn">🔐 Sign in</button>
+    <button id="btnSignOut" style="display:none">🚪 Sign out</button>
+    <button id="btnStart">▶ Start Presence Sync</button>
+    <button id="btnStop" disabled>⏸ Stop</button>
+  </div>
+
+  <div class="row">
+    <span class="status"><span class="dot green"></span>Available</span>
+    <span class="status"><span class="dot red"></span>Busy/Meeting</span>
+    <span class="status"><span class="dot purple"></span>DND</span>
+    <span class="status"><span class="dot amber"></span>Away</span>
+    <span class="status"><span class="dot gray"></span>Offline</span>
+  </div>
+
+  <div class="row">
+    <button data-code="A">Send Available (A)</button>
+    <button data-code="B">Busy (B)</button>
+    <button data-code="D">Do Not Disturb (D)</button>
+    <button data-code="W">Away (W)</button>
+    <button data-code="M">In Meeting (M)</button>
+    <button data-code="P">Presenting (P)</button>
+    <button data-code="O">Offline (O)</button>
+    <button data-code="T">Test Rainbow (T)</button>
+    <button data-code="X">Lights Off (X)</button>
+  </div>
+
+  <p id="status" class="small">Status: Not connected.</p>
+
+  <script>
+    // ------- Web Serial -------
+    let port, writer;
+    async function connectSerial(){
+      try{
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        setMsg("Connected to serial.");
+      }catch(e){
+        setMsg("Serial connect failed: " + e.message);
+      }
+    }
+    async function sendCode(c){
+      if (!writer){ setMsg("Not connected."); return; }
+      const data = new TextEncoder().encode(c + "\n");
+      await writer.write(data);
+    }
+    document.getElementById("btnConnect").addEventListener("click", connectSerial);
+    document.querySelectorAll("button[data-code]").forEach(b => b.addEventListener("click", ()=> sendCode(b.dataset.code)));
+
+    // ------- MSAL + Graph -------
+    // You can replace this with your own App Registration clientId for your tenant.
+    const msalConfig = {
+      auth: {
+        clientId: "51f81489-12ee-4a9e-aaae-a2591f45987d", // Microsoft first-party "Office" public client (for demo). Consider creating your own app registration.
+        authority: "https://login.microsoftonline.com/organizations",
+        redirectUri: window.location.origin
+      },
+      cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false }
+    };
+    const msalInstance = new msal.PublicClientApplication(msalConfig);
+    const graphScopes = ["Presence.Read"];
+    let account = null;
+    let polling = null;
+
+    async function signIn(){
+      try{
+        const result = await msalInstance.loginPopup({ scopes: graphScopes });
+        account = result.account;
+        document.getElementById("btnSignIn").style.display = "none";
+        document.getElementById("btnSignOut").style.display = "inline-block";
+        setMsg("Signed in as " + account.username);
+      }catch(e){
+        setMsg("Sign-in failed: " + e.message);
+      }
+    }
+    async function signOut(){
+      try{
+        await msalInstance.logoutPopup({ account });
+      } finally {
+        account = null;
+        document.getElementById("btnSignOut").style.display = "none";
+        document.getElementById("btnSignIn").style.display = "inline-block";
+        setMsg("Signed out.");
+      }
+    }
+    document.getElementById("btnSignIn").addEventListener("click", signIn);
+    document.getElementById("btnSignOut").addEventListener("click", signOut);
+
+    async function getToken(){
+      try{
+        const res = await msalInstance.acquireTokenSilent({ account, scopes: graphScopes });
+        return res.accessToken;
+      }catch{
+        const res = await msalInstance.acquireTokenPopup({ scopes: graphScopes });
+        return res.accessToken;
+      }
+    }
+
+    function mapPresenceToCode(p){
+      // p = { availability, activity }
+      const a = (p.availability||"").toLowerCase();
+      const act = (p.activity||"").toLowerCase();
+      if (a==="available") return "A";
+      if (a==="busy" && act.includes("inacall")) return "M";
+      if (a==="busy" && act.includes("inaconferencecall")) return "M";
+      if (a==="busy" && act.includes("presenting")) return "P";
+      if (a==="busy") return "B";
+      if (a==="donotdisturb") return "D";
+      if (a==="be-right-back" || a==="away") return "W";
+      if (a==="offline" || a==="unknown") return "O";
+      return "O";
+    }
+
+    async function fetchPresence(){
+      if (!account){ setMsg("Not signed in."); return; }
+      const token = await getToken();
+      const res = await fetch("https://graph.microsoft.com/v1.0/me/presence", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (!res.ok){
+        const txt = await res.text();
+        throw new Error("Graph error " + res.status + ": " + txt);
+      }
+      return res.json();
+    }
+
+    async function poll(){
+      try{
+        const p = await fetchPresence();
+        const code = mapPresenceToCode(p);
+        await sendCode(code);
+        setMsg("Presence: " + p.availability + " / " + p.activity + " → " + code);
+      }catch(e){
+        setMsg("Polling error: " + e.message);
+      }
+    }
+
+    document.getElementById("btnStart").addEventListener("click", ()=>{
+      if (polling) return;
+      poll();
+      polling = setInterval(poll, 15000);
+      document.getElementById("btnStop").disabled = false;
+    });
+    document.getElementById("btnStop").addEventListener("click", ()=>{
+      if (polling) clearInterval(polling);
+      polling = null;
+      document.getElementById("btnStop").disabled = true;
+    });
+
+    function setMsg(t){ document.getElementById("status").textContent = "Status: " + t; }
+  </script>
+</body>
+</html>
